@@ -1,2 +1,49 @@
-agent.md
+# Dependencies
+node_modules/
+__pycache__/
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Env / secrets
 .env
+.env.*
+!.env.example
+!.env.frontend.example
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# Test / coverage
+coverage/
+.nyc_output/
+
+# Build outputs
+frontend/dist/
+
+# Virtual envs
+.venv/
+venv/
+env/
+
+# Supabase local
+.supabase/
+
+# Database dumps
+*.sql
+*.sqlite
+*.db
+sample.png
+agent.md
