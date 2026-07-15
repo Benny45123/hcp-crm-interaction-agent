@@ -11,7 +11,8 @@ build/
 .env.*
 !.env.example
 !.env.frontend.example
-
+backend/.env
+frontend/.env
 # IDE
 .idea/
 .vscode/
@@ -32,6 +33,7 @@ coverage/
 
 # Build outputs
 frontend/dist/
+frontend/dist/**
 
 # Virtual envs
 .venv/

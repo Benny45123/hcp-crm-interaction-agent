@@ -26,14 +26,14 @@ uvicorn app.main:app --reload --port 8000
 
 Required env vars:
 
-| Var | Required | Notes |
-|-----|---------|-------|
-| `GROQ_API_KEY` | Yes | Get from console.groq.com |
-| `DATABASE_URL` | Yes | `postgresql://...` |
-| `PORT` | No | default 8000 |
-| `FRONTEND_URL` | No | CORS origin, default http://localhost:5173 |
-| `MODEL_PRIMARY` | No | default `gemma2-9b-it` |
-| `MODEL_FALLBACK` | No | default `llama-3.3-70b-versatile` |
+| Var                | Required | Notes                                      |
+| ------------------ | -------- | ------------------------------------------ |
+| `GROQ_API_KEY`   | Yes      | Get from console.groq.com                  |
+| `DATABASE_URL`   | Yes      | `postgresql://...`                       |
+| `PORT`           | No       | default 8000                               |
+| `FRONTEND_URL`   | No       | CORS origin, default http://localhost:5173 |
+| `MODEL_PRIMARY`  | No       | default`gemma2-9b-it`                    |
+| `MODEL_FALLBACK` | No       | default`llama-3.3-70b-versatile`         |
 
 ### Endpoint
 
@@ -73,21 +73,27 @@ Open http://localhost:5173
 ### Test Scenarios (from video)
 
 1. Log interaction:
-   > "Today I met with Dr. Smith and discussed product X efficacy. The sentiment was positive and I shared the brochures."
 
+   > "Today I met with Dr. Smith and discussed product X efficacy. The sentiment was positive and I shared the brochures."
+   >
 2. Edit field:
+
    > "Sorry, the name was actually Dr. John and the sentiment was negative."
+   >
 
    (Only name and sentiment update — rest stays.)
-
 3. History lookup:
+
    > "What did we last discuss with Dr. Smith?"
-
+   >
 4. Schedule follow-up:
-   > "Circle back in two weeks with the trial data."
 
+   > "Circle back in two weeks with the trial data."
+   >
 5. Compliance check:
+
    > "Check this for off-label claims."
+   >
 
 ---
 
