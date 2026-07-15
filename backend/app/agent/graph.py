@@ -11,6 +11,8 @@ from app.agent.tools import (
 from langchain_groq import ChatGroq
 from langchain_core.prompts import ChatPromptTemplate
 import os
+import re
+import json as _json
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -19,15 +21,15 @@ load_dotenv()
 tools = [log_interaction, edit_interaction, get_hcp_history, schedule_follow_up, check_compliance]
 TOOL_NAMES = {t.name: t for t in tools}
 
-PRIMARY = os.getenv("MODEL_PRIMARY", "gemma2-9b-it")
-FALLBACK = os.getenv("MODEL_FALLBACK", "llama-3.3-70b-versatile")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY") or ""
+PRIMARY = os.getenv("MODEL_PRIMARY", "llama-3.3-70b-versatile")
+FALLBACK = os.getenv("MODEL_FALLBACK", "llama-3.1-8b-instant")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 
 
 def get_llm(model_name: str = PRIMARY):
     if not GROQ_API_KEY:
         raise ValueError("GROQ_API_KEY not configured")
-    return ChatGroq(model=model_name, api_key=GROQ_API_KEY, temperature=0.1)
+    return ChatGroq(model=model_name, api_key=GROQ_API_KEY, temperature=0.1)  # type: ignore[arg-type]
 
 
 def _get_user_msg(messages) -> str:
@@ -52,71 +54,56 @@ def _get_response_text(resp) -> str:
     return str(content).strip()
 
 
+def _build_system_prompt(current_form_state: dict, bound: str) -> str:
+    form_json_segment = _json.dumps(current_form_state) if current_form_state else "(empty)"
+    return (
+        "You are the CRM AI assistant router for a pharmaceutical field rep app.\n\n"
+        "Available tools:\n"
+        " - log_interaction(rep_message: str) -> new HCP interaction\n"
+        " - edit_interaction(correction: str, current_fields_json: str) -> update fields\n"
+        " - get_hcp_history(hcp_name: str) -> past interactions summary\n"
+        " - schedule_follow_up(message: str) -> extract follow-up date/action\n"
+        " - check_compliance(interaction_summary: str) -> off-label claim check\n\n"
+        "Routing rules (be very strict):\n"
+        ' 1. If rep message describes a new visit or interaction details -> action "tool_call", tool "log_interaction"\n'
+        ' 2. If rep message says "actually", "update", "correction", "instead", "no" (fixing an entry) -> action "tool_call", tool "edit_interaction"\n'
+        ' 3. If rep asks about past visits for a named HCP -> action "tool_call", tool "get_hcp_history"\n'
+        ' 4. If rep says "follow up", "schedule", "circle back", "remind", "next week" -> action "tool_call", tool "schedule_follow_up"\n'
+        ' 5. If rep asks "is this compliant", "off-label", "any warnings", "check" -> action "tool_call", tool "check_compliance"\n'
+        ' 6. If rep says hi/bye/thanks/hello/good morning with no substantive details -> action "chat"\n\n'
+        f"Current form state JSON: {form_json_segment}\n\n"
+        "Respond with EXACTLY this JSON structure and nothing else:\n"
+        '{"action": "tool_call" or "chat", "tool": "tool_name_or_null", "args": {"key": "value"}}\n'
+        "No markdown. No code fences. No explanation.\n"
+        f"Valid tool names: {bound}\n"
+    )
+
+
 def run_llm_router(messages, current_form_state: dict):
     bound = ", ".join([t.name for t in tools])
-    form_json = repr(current_form_state)
-    prompt = ChatPromptTemplate.from_messages([
-        (
-            "system",
-            f"You are the CRM AI assistant router. Choose EXACTLY ONE tool per turn.
-
-"
-            f"Available tools:
-"
-            f"  log_interaction(rep_message: str) - new HCP interaction
-"
-            f"  edit_interaction(correction: str, current_fields_json: str) - update fields
-"
-            f"  get_hcp_history(hcp_name: str) - past interactions summary
-"
-            f"  schedule_follow_up(message: str) - extract follow-up date/action
-"
-            f"  check_compliance(interaction_summary: str) - off-label claim check
-
-"
-            f"Rules:
-"
-            f"  1. Logging visit -> log_interaction
-"
-            f"  2. Correction (actually/update) -> edit_interaction
-"
-            f"  3. Past interactions question -> get_hcp_history
-"
-            f"  4. Schedule/circle back -> schedule_follow_up
-"
-            f"  5. Compliance/off-label check -> check_compliance
-"
-            f"  6. Greeting/farewell -> plain text, no tool
-
-"
-            f"Current form state: {form_json}
-
-"
-            f"Return ONLY valid JSON: {{\"action\": \"tool_call\"|\"chat\", \"tool\": \"name\", \"args\": {{...}}}}
-"
-            f"No markdown. No backticks.
-"
-            f"Tool names: {bound}",
-        ),
-        ("user", "{user_msg}"),
-    ])
-
+    system_text = _build_system_prompt(current_form_state, bound)
+    llm_messages = [
+        {"role": "system", "content": system_text},
+        {"role": "user", "content": _get_user_msg(messages)},
+    ]
     try:
         llm = get_llm(PRIMARY)
     except Exception:
         llm = get_llm(FALLBACK)
-
-    resp = (prompt | llm).invoke({"user_msg": _get_user_msg(messages)})
+    resp = llm.invoke(llm_messages)
     raw = _get_response_text(resp)
+    print(f"[ROUTER RAW LLM OUTPUT]: {raw!r}")
     if raw.startswith("```"):
-        import re
         raw = re.sub(r"^```(?:json)?\s*", "", raw)
         raw = re.sub(r"\s*```$", "", raw).strip()
-    import json
     try:
-        return json.loads(raw)
+        parsed = _json.loads(raw)
+        if not isinstance(parsed, dict):
+            raise ValueError("Not a dict")
+        return parsed
     except Exception:
-        return {"action": "chat", "tool": None, "args": {}}
+        pass
+    return {"action": "chat", "tool": None, "args": {}}
 
 
 def agent_node(state: AgentState) -> dict:
@@ -147,7 +134,7 @@ def agent_node(state: AgentState) -> dict:
         return updated
 
     if tool_name == "edit_interaction":
-        args.setdefault("current_fields_json", __import__("json").dumps(state.get("current_form_state", {})))
+        args.setdefault("current_fields_json", _json.dumps(state.get("current_form_state", {})))
     elif tool_name == "log_interaction":
         args["rep_message"] = _get_user_msg(state.get("messages", []))
     elif tool_name == "get_hcp_history":
@@ -159,13 +146,10 @@ def agent_node(state: AgentState) -> dict:
         args["interaction_summary"] = args.get("interaction_summary") or f"Products: {products}\nNotes: {notes}"
 
     raw_out = tool_fn.invoke(args)
-
-    import json as _json
     try:
         tool_result = _json.loads(raw_out)
     except Exception:
         tool_result = {"reply": str(raw_out), "updated_fields": {}}
-
     reply = tool_result.get("reply", "Done.")
     updated["messages"] = [*updated["messages"], AIMessage(content=reply)]
     updated["updated_fields"] = {**updated["updated_fields"], **tool_result.get("updated_fields", {})}
@@ -184,4 +168,3 @@ def build_graph():
 
 
 graph = build_graph()
-app_graph = build_graph()

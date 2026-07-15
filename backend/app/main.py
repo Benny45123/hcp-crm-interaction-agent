@@ -6,6 +6,7 @@ from app.db.models import Base
 from app.db.session import engine, get_db
 from app.db.models import Interaction, FollowUp, SentimentEnum
 from sqlalchemy.orm import Session
+from fastapi import Depends
 import os
 from dotenv import load_dotenv
 
@@ -23,14 +24,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Auto-create tables on startup
-Base.metadata.create_all(bind=engine)
+# Auto-create tables on startup (gracefully handle DB unavailability)
+try:
+    Base.metadata.create_all(bind=engine)
+except Exception as e:
+    # Log but don't crash — DB may not be available yet (e.g. Supabase project paused)
+    import sys
+    print(f"[WARN] Could not auto-migrate tables at startup: {e}", file=sys.stderr)
 
 # Pre-compile LangGraph
 graph = build_graph()
 
 
-# ── Schemas ────────────────────────────────────────────────────────
+# -- Schemas
 class ChatRequest(BaseModel):
     message: str
     current_form_state: dict = {}
@@ -42,7 +48,7 @@ class ChatResponse(BaseModel):
     compliance_flag: str | None = None
 
 
-# ── Endpoints ──────────────────────────────────────────────────────
+# -- Endpoints
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -58,7 +64,6 @@ def chat(req: ChatRequest):
         "compliance_flag": None,
     }
 
-    # Wrap messages as HumanMessage objects for LangGraph
     msgs = []
     for m in initial_state["messages"]:
         if m["role"] == "user":
@@ -82,10 +87,8 @@ def chat(req: ChatRequest):
     for m in all_msgs:
         if isinstance(m, dict) and m.get("role") == "assistant":
             assistant_reply = m.get("content", "")
-        elif hasattr(m, "type") and m.type == "ai":
-            assistant_reply = m.content
-        elif hasattr(m, "role") and m.role == "assistant":
-            assistant_reply = getattr(m, "content", str(m))
+        elif hasattr(m, "content"):
+            assistant_reply = getattr(m, "content", "") or assistant_reply
 
     updated_fields = result.get("updated_fields", {})
     compliance_flag = result.get("compliance_flag")
@@ -98,7 +101,7 @@ def chat(req: ChatRequest):
 
 
 @app.get("/interactions")
-def list_interactions(db: Session = next(get_db())):
+def list_interactions(db: Session = Depends(get_db)):
     rows = db.query(Interaction).order_by(Interaction.interaction_date.desc()).limit(50).all()
     return [
         {
